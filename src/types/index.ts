@@ -15,7 +15,20 @@ export interface GanttItem {
   color: string | null
   assignee: string | null
   progress: number            // 0-100
+  completed: boolean
   collapsed: boolean
+  notes: string | null
+  created_at?: string
+}
+
+export interface Attachment {
+  id: string
+  item_id: string
+  project_id: string
+  name: string
+  mime_type: string
+  storage_path: string
+  size_bytes: number
   created_at?: string
 }
 

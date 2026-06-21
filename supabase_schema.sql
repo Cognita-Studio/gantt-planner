@@ -52,3 +52,29 @@ alter table dependencies enable row level security;
 create policy "workspace projects" on projects for all using (true) with check (true);
 create policy "workspace items" on gantt_items for all using (true) with check (true);
 create policy "workspace deps" on dependencies for all using (true) with check (true);
+
+-- ── ADDITIONS for bottom panel ──
+
+alter table gantt_items
+  add column if not exists completed boolean not null default false,
+  add column if not exists notes     text;
+
+create table if not exists attachments (
+  id            uuid primary key default uuid_generate_v4(),
+  item_id       uuid not null references gantt_items(id) on delete cascade,
+  project_id    uuid not null references projects(id) on delete cascade,
+  name          text not null,
+  mime_type     text not null default '',
+  storage_path  text not null,
+  size_bytes    bigint not null default 0,
+  created_at    timestamptz default now()
+);
+create index if not exists attachments_item_id on attachments (item_id);
+create index if not exists attachments_project_id on attachments (project_id);
+
+alter table attachments enable row level security;
+create policy "workspace attachments" on attachments for all using (true) with check (true);
+
+-- Storage bucket (run this in Supabase Dashboard → Storage, or via SQL)
+-- insert into storage.buckets (id, name, public) values ('gantt-attachments', 'gantt-attachments', true)
+-- on conflict do nothing;

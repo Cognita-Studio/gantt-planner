@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { supabase } from '../lib/supabase'
 import { getWorkspaceId } from '../lib/workspace'
-import type { GanttItem, Dependency, Project, ZoomLevel, DurationUnit } from '../types'
+import type { GanttItem, Dependency, Project, Attachment, ZoomLevel, DurationUnit } from '../types'
 import { nextSortOrder } from '../lib/gantt'
 
 interface ProjectState {
@@ -9,12 +9,12 @@ interface ProjectState {
   currentProjectId: string | null
   items: GanttItem[]
   dependencies: Dependency[]
+  attachments: Attachment[]
   zoom: ZoomLevel
   durationUnit: DurationUnit
   loading: boolean
   error: string | null
 
-  // actions
   loadProjects: () => Promise<void>
   selectProject: (id: string) => Promise<void>
   createProject: (name: string, description?: string) => Promise<void>
@@ -32,6 +32,10 @@ interface ProjectState {
   updateDependency: (id: string, patch: Partial<Dependency>) => Promise<void>
   deleteDependency: (id: string) => Promise<void>
 
+  uploadAttachment: (itemId: string, projectId: string, file: File) => Promise<void>
+  deleteAttachment: (attachment: Attachment) => Promise<void>
+  getAttachmentUrl: (path: string) => string
+
   setZoom: (z: ZoomLevel) => void
   setDurationUnit: (u: DurationUnit) => void
 }
@@ -41,6 +45,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   currentProjectId: null,
   items: [],
   dependencies: [],
+  attachments: [],
   zoom: 'week',
   durationUnit: 'days',
   loading: false,
@@ -87,18 +92,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       currentProjectId: s.currentProjectId === id ? null : s.currentProjectId,
       items: s.currentProjectId === id ? [] : s.items,
       dependencies: s.currentProjectId === id ? [] : s.dependencies,
+      attachments: s.currentProjectId === id ? [] : s.attachments,
     }))
   },
 
   loadItems: async (projectId) => {
     set({ loading: true })
-    const [itemsRes, depsRes] = await Promise.all([
+    const [itemsRes, depsRes, attRes] = await Promise.all([
       supabase.from('gantt_items').select('*').eq('project_id', projectId).order('sort_order'),
       supabase.from('dependencies').select('*').eq('project_id', projectId),
+      supabase.from('attachments').select('*').eq('project_id', projectId),
     ])
     set({
       items: itemsRes.data ?? [],
       dependencies: depsRes.data ?? [],
+      attachments: attRes.data ?? [],
       loading: false,
       error: itemsRes.error?.message ?? depsRes.error?.message ?? null,
     })
@@ -107,7 +115,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   createItem: async (patch) => {
     const siblings = get().items.filter(i => i.parent_id === (patch.parent_id ?? null))
     const sort_order = nextSortOrder(siblings)
-    const newItem: Omit<GanttItem, 'id' | 'created_at'> = {
+    const newItem = {
       project_id: patch.project_id,
       parent_id: patch.parent_id ?? null,
       sort_order,
@@ -119,7 +127,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       color: patch.color ?? null,
       assignee: patch.assignee ?? null,
       progress: patch.progress ?? 0,
+      completed: false,
       collapsed: false,
+      notes: null,
     }
     const { data, error } = await supabase.from('gantt_items').insert(newItem).select().single()
     if (error) { set({ error: error.message }); return }
@@ -133,7 +143,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   deleteItem: async (id) => {
-    // collect all descendant ids
     const all = get().items
     const toDelete = new Set<string>()
     const queue = [id]
@@ -146,6 +155,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set(s => ({
       items: s.items.filter(i => !toDelete.has(i.id)),
       dependencies: s.dependencies.filter(d => !toDelete.has(d.from_item_id) && !toDelete.has(d.to_item_id)),
+      attachments: s.attachments.filter(a => !toDelete.has(a.item_id)),
     }))
   },
 
@@ -175,6 +185,35 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   deleteDependency: async (id) => {
     await supabase.from('dependencies').delete().eq('id', id)
     set(s => ({ dependencies: s.dependencies.filter(d => d.id !== id) }))
+  },
+
+  uploadAttachment: async (itemId, projectId, file) => {
+    const ext = file.name.split('.').pop()
+    const path = `${projectId}/${itemId}/${crypto.randomUUID()}.${ext}`
+    const { error: upErr } = await supabase.storage.from('gantt-attachments').upload(path, file)
+    if (upErr) { set({ error: upErr.message }); return }
+    const record = {
+      item_id: itemId,
+      project_id: projectId,
+      name: file.name,
+      mime_type: file.type,
+      storage_path: path,
+      size_bytes: file.size,
+    }
+    const { data, error } = await supabase.from('attachments').insert(record).select().single()
+    if (error) { set({ error: error.message }); return }
+    set(s => ({ attachments: [...s.attachments, data] }))
+  },
+
+  deleteAttachment: async (att) => {
+    await supabase.storage.from('gantt-attachments').remove([att.storage_path])
+    await supabase.from('attachments').delete().eq('id', att.id)
+    set(s => ({ attachments: s.attachments.filter(a => a.id !== att.id) }))
+  },
+
+  getAttachmentUrl: (path) => {
+    const { data } = supabase.storage.from('gantt-attachments').getPublicUrl(path)
+    return data.publicUrl
   },
 
   setZoom: (z) => set({ zoom: z }),
