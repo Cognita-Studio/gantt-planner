@@ -1,4 +1,4 @@
-import React, { useRef, useMemo } from 'react'
+import React, { useMemo } from 'react'
 import { useProjectStore } from '../../store/projectStore'
 import { flattenTree, computeAutoDates, effectiveDates } from '../../lib/gantt'
 import { buildTimeColumns, dateToX, pxPerDay, fromISO, addDays } from '../../lib/dates'
@@ -20,22 +20,23 @@ interface Props {
   onSelect: (id: string) => void
   onEdit: (item: GanttItem) => void
   chartRef: React.RefObject<HTMLDivElement>
+  collapsedProjects: Set<string>
+  toggleProject: (id: string) => void
+  themeKey: number
 }
 
-export function GanttChart({ selectedId, onSelect, chartRef }: Props) {
-  const { items, dependencies, zoom, updateItem } = useProjectStore()
+export function GanttChart({ selectedId, onSelect, chartRef, collapsedProjects, toggleProject, themeKey }: Props) {
+  const { items, dependencies, zoom, updateItem, projects, currentProjectId } = useProjectStore()
   const flat = flattenTree(items)
   const autoDates = computeAutoDates(items)
 
-  // Resolve theme colors from CSS variables
-  const bgPage    = getCSSVar('--g-bg-page',  '#0f1117')
-  const bgPanel   = getCSSVar('--g-bg-panel', '#161820')
-  const bgElev    = getCSSVar('--g-bg-elev',  '#1e2030')
-  const border    = getCSSVar('--g-border',   '#2a2d45')
-  const text2     = getCSSVar('--g-text2',    '#9098c0')
-  const text3     = getCSSVar('--g-text3',    '#5a6080')
-  const accent    = getCSSVar('--g-accent',   '#5b6af0')
-  const accentT   = getCSSVar('--g-accent-t', '#7c8bff')
+  // themeKey in deps forces re-read of CSS vars after theme change
+  const bgPage  = useMemo(() => getCSSVar('--g-bg-page',  '#0f1117'), [themeKey])
+  const bgPanel = useMemo(() => getCSSVar('--g-bg-panel', '#161820'), [themeKey])
+  const border  = useMemo(() => getCSSVar('--g-border',   '#2a2d45'), [themeKey])
+  const text2   = useMemo(() => getCSSVar('--g-text2',    '#9098c0'), [themeKey])
+  const accent  = useMemo(() => getCSSVar('--g-accent',   '#5b6af0'), [themeKey])
+  const accentT = useMemo(() => getCSSVar('--g-accent-t', '#7c8bff'), [themeKey])
 
   const allDates = items.flatMap(i => {
     const d = effectiveDates(i, autoDates)
@@ -55,21 +56,39 @@ export function GanttChart({ selectedId, onSelect, chartRef }: Props) {
     [timelineStart.toISOString(), timelineEnd.toISOString(), zoom],
   )
 
-  const totalWidth  = columns.reduce((s, c) => s + c.width, 0)
-  const totalHeight = HEADER_H + flat.length * ROW_HEIGHT
-  const ppd = pxPerDay(zoom)
+  const totalWidth = columns.reduce((s, c) => s + c.width, 0)
+
+  // Build the row list: for each project a project-row, then (if active+expanded) its item rows
+  type RowKind = { kind: 'project'; projectId: string } | { kind: 'item'; item: GanttItem; rowIndex: number }
+  const rows: RowKind[] = []
+  let itemRowIndex = 0
+  for (const project of projects) {
+    rows.push({ kind: 'project', projectId: project.id })
+    const isActive = project.id === currentProjectId
+    const isCollapsed = collapsedProjects.has(project.id)
+    if (isActive && !isCollapsed) {
+      for (const item of flat) {
+        rows.push({ kind: 'item', item, rowIndex: itemRowIndex++ })
+      }
+    }
+  }
+
+  const totalHeight = HEADER_H + rows.length * ROW_HEIGHT
 
   const todayX = dateToX(today, timelineStart, zoom)
+
+  // Project bar: spans from earliest to latest item date
+  const projectBarStart = allDates.length ? allDates.reduce((a, b) => (a < b ? a : b)) : null
+  const projectBarEnd   = allDates.length ? allDates.reduce((a, b) => (a > b ? a : b)) : null
 
   const handleDatesChange = async (id: string, start: string, end: string) => {
     await updateItem(id, { start_date: start, end_date: end })
   }
 
-  // Stripe colors that work on both dark and light backgrounds
   const stripeOdd = 'rgba(128,128,128,0.04)'
 
   return (
-    <div ref={chartRef} className="overflow-auto scrollbar-thin flex-1 relative"
+    <div ref={chartRef} className="overflow-visible relative"
       style={{ background: bgPage }}>
       <svg width={totalWidth} height={totalHeight} style={{ display: 'block', minWidth: '100%' }}>
 
@@ -117,17 +136,17 @@ export function GanttChart({ selectedId, onSelect, chartRef }: Props) {
         {/* header bottom border */}
         <line x1={0} y1={HEADER_H} x2={totalWidth} y2={HEADER_H} stroke={border} strokeWidth={1} />
 
-        {/* ── GRID ROWS ── */}
-        {flat.map((_, i) => (
-          <rect key={`row-${i}`}
+        {/* ── ALL ROWS: stripes + dividers ── */}
+        {rows.map((row, i) => (
+          <rect key={`stripe-${i}`}
             x={0} y={HEADER_H + i * ROW_HEIGHT}
             width={totalWidth} height={ROW_HEIGHT}
-            fill={i % 2 === 1 ? stripeOdd : 'transparent'}
+            fill={row.kind === 'project'
+              ? `${accent}18`
+              : i % 2 === 1 ? stripeOdd : 'transparent'}
           />
         ))}
-
-        {/* row dividers */}
-        {flat.map((_, i) => (
+        {rows.map((_, i) => (
           <line key={`rdiv-${i}`}
             x1={0} y1={HEADER_H + (i + 1) * ROW_HEIGHT}
             x2={totalWidth} y2={HEADER_H + (i + 1) * ROW_HEIGHT}
@@ -140,15 +159,77 @@ export function GanttChart({ selectedId, onSelect, chartRef }: Props) {
           stroke={accent} strokeWidth={1.5} strokeDasharray="4,3" opacity={0.8} />
         <text x={todayX + 4} y={12} fontSize={9} fill={accentT}>Today</text>
 
-        {/* ── DEPENDENCY ARROWS ── */}
-        <DependencyArrows
-          dependencies={dependencies} items={items}
-          timelineStart={timelineStart} zoom={zoom}
-          rowHeight={ROW_HEIGHT} flatItems={flat}
-        />
+        {/* ── PROJECT BAR ROWS ── */}
+        {rows.map((row, i) => {
+          if (row.kind !== 'project') return null
+          const isActive = row.projectId === currentProjectId
+          const project = projects.find(p => p.id === row.projectId)
+          if (!project) return null
 
-        {/* ── BARS ── */}
-        {flat.map((item, i) => {
+          const rowY = HEADER_H + i * ROW_HEIGHT
+
+          // Only draw a bar for the active project (we have its item dates)
+          if (isActive && projectBarStart && projectBarEnd) {
+            const x1 = dateToX(parseISO(projectBarStart), timelineStart, zoom)
+            const x2 = dateToX(parseISO(projectBarEnd), timelineStart, zoom) + pxPerDay(zoom)
+            const barW = Math.max(x2 - x1, 4)
+            const barH = ROW_HEIGHT * 0.45
+            const barY = rowY + (ROW_HEIGHT - barH) / 2
+
+            return (
+              <g key={`proj-bar-${row.projectId}`}
+                style={{ cursor: 'pointer' }}
+                onClick={() => toggleProject(row.projectId)}>
+                {/* bar */}
+                <rect x={x1} y={barY} width={barW} height={barH}
+                  rx={3} fill={accent} opacity={0.85} />
+                {/* project name label inside bar */}
+                <text x={x1 + 6} y={barY + barH / 2 + 4}
+                  fontSize={10} fill="white" fontWeight={600}
+                  style={{ pointerEvents: 'none' }}>
+                  {project.name}
+                </text>
+              </g>
+            )
+          }
+
+          // Non-active project: just a subtle label
+          return (
+            <g key={`proj-bar-${row.projectId}`}
+              style={{ cursor: 'pointer' }}
+              onClick={() => toggleProject(row.projectId)}>
+              <text x={8} y={rowY + ROW_HEIGHT / 2 + 4}
+                fontSize={10} fill={text2} fontStyle="italic"
+                style={{ pointerEvents: 'none' }}>
+                {project.name} — select to view
+              </text>
+            </g>
+          )
+        })}
+
+        {/* ── DEPENDENCY ARROWS ── */}
+        {(() => {
+          // Compute item row y-positions from the unified row list
+          const itemYMap = new Map<string, number>()
+          rows.forEach((row, i) => {
+            if (row.kind === 'item') {
+              itemYMap.set(row.item.id, HEADER_H + i * ROW_HEIGHT)
+            }
+          })
+          return (
+            <DependencyArrows
+              dependencies={dependencies} items={items}
+              timelineStart={timelineStart} zoom={zoom}
+              rowHeight={ROW_HEIGHT} flatItems={flat}
+              rowYOverride={itemYMap}
+            />
+          )
+        })()}
+
+        {/* ── ITEM BARS ── */}
+        {rows.map((row, i) => {
+          if (row.kind !== 'item') return null
+          const item = row.item
           const d = effectiveDates(item, autoDates)
           if (!d.start || !d.end) return null
           return (

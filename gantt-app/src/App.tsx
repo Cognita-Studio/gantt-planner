@@ -18,10 +18,21 @@ export default function App() {
   const [editingItem, setEditingItem] = useState<GanttItem | null>(null)
   const [depsItem, setDepsItem] = useState<GanttItem | null>(null)
   const [showProjectModal, setShowProjectModal] = useState(false)
+  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set())
+  const [themeKey, setThemeKey] = useState(0)
   const chartRef = useRef<HTMLDivElement>(null!)
   const treeScrollRef = useRef<HTMLDivElement>(null)
   const chartScrollRef = useRef<HTMLDivElement>(null)
   const syncingRef = useRef(false)
+
+  const toggleProject = (id: string) => {
+    setCollapsedProjects(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   useEffect(() => {
     applyTheme(getStoredTheme())
@@ -76,6 +87,7 @@ export default function App() {
         onNewItem={handleNewItem}
         chartRef={chartRef}
         onNewProject={() => setShowProjectModal(true)}
+        onThemeChange={() => setThemeKey(k => k + 1)}
       />
 
       {/* ── Main area ── */}
@@ -91,6 +103,8 @@ export default function App() {
               onNewProject={() => setShowProjectModal(true)}
               scrollRef={treeScrollRef as React.RefObject<HTMLDivElement>}
               onScroll={handleTreeScroll}
+              collapsedProjects={collapsedProjects}
+              toggleProject={toggleProject}
             />
           </div>
 
@@ -104,6 +118,9 @@ export default function App() {
                 onSelect={setSelectedId}
                 onEdit={setEditingItem}
                 chartRef={chartRef}
+                collapsedProjects={collapsedProjects}
+                toggleProject={toggleProject}
+                themeKey={themeKey}
               />
             </div>
           ) : (

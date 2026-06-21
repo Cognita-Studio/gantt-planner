@@ -13,9 +13,10 @@ interface Props {
   onNewItem: () => void
   chartRef: React.RefObject<HTMLDivElement>
   onNewProject: () => void
+  onThemeChange?: () => void
 }
 
-export function Toolbar({ onNewItem, chartRef, onNewProject }: Props) {
+export function Toolbar({ onNewItem, chartRef, onNewProject, onThemeChange }: Props) {
   const { projects, currentProjectId, zoom, setZoom, durationUnit, setDurationUnit, items, dependencies } = useProjectStore()
   const [copied, setCopied] = React.useState(false)
   const [exportOpen, setExportOpen] = React.useState(false)
@@ -35,6 +36,7 @@ export function Toolbar({ onNewItem, chartRef, onNewProject }: Props) {
     saveTheme(id)
     setCurrentTheme(id)
     setThemeOpen(false)
+    onThemeChange?.()
   }
 
   const handleExportPng = async () => { if (!chartRef.current) return; setExportOpen(false); await exportToPng(chartRef.current, `${project?.name ?? 'gantt'}.png`) }

@@ -11,9 +11,10 @@ interface Props {
   zoom: ZoomLevel
   rowHeight: number
   flatItems: GanttItem[]
+  rowYOverride?: Map<string, number>  // absolute Y position for each item id
 }
 
-export function DependencyArrows({ dependencies, items, timelineStart, zoom, rowHeight, flatItems }: Props) {
+export function DependencyArrows({ dependencies, items, timelineStart, zoom, rowHeight, flatItems, rowYOverride }: Props) {
   const byId = new Map(items.map(i => [i.id, i]))
   const autoDates = computeAutoDates(items)
   const ppd = pxPerDay(zoom)
@@ -31,12 +32,20 @@ export function DependencyArrows({ dependencies, items, timelineStart, zoom, row
         const toDates = effectiveDates(to, autoDates)
         if (!fromDates.start || !fromDates.end || !toDates.start || !toDates.end) return null
 
-        const fromRowIdx = rowIndex.get(dep.from_item_id)
-        const toRowIdx = rowIndex.get(dep.to_item_id)
-        if (fromRowIdx === undefined || toRowIdx === undefined) return null
-
-        const fromY = fromRowIdx * rowHeight + rowHeight / 2
-        const toY = toRowIdx * rowHeight + rowHeight / 2
+        let fromY: number, toY: number
+        if (rowYOverride) {
+          const fy = rowYOverride.get(dep.from_item_id)
+          const ty = rowYOverride.get(dep.to_item_id)
+          if (fy === undefined || ty === undefined) return null
+          fromY = fy + rowHeight / 2
+          toY = ty + rowHeight / 2
+        } else {
+          const fromRowIdx = rowIndex.get(dep.from_item_id)
+          const toRowIdx = rowIndex.get(dep.to_item_id)
+          if (fromRowIdx === undefined || toRowIdx === undefined) return null
+          fromY = fromRowIdx * rowHeight + rowHeight / 2
+          toY = toRowIdx * rowHeight + rowHeight / 2
+        }
 
         let x1: number, x2: number
         if (dep.type === 'FS') {
